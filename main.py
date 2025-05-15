@@ -1,91 +1,70 @@
 import streamlit as st
+from streamlit_mic_recorder import mic_recorder
 import cohere
 import os
-import PyPDF2
-from sklearn.metrics.pairwise import cosine_similarity
-from sentence_transformers import SentenceTransformer
-import tempfile
+import json
+import numpy as np
+from PyPDF2 import PdfReader
+from sentence_transformers import SentenceTransformer, util
 
-# Set your Cohere API key here
+# --- API KEY CONFIGURATION ---
 COHERE_API_KEY = "nocojkkDxtVHUgFlrKwwh9fPTBwIsBWOxfx9T7Yz"
 co = cohere.Client(COHERE_API_KEY)
 
-# Load embedding model
-embedder = SentenceTransformer('all-MiniLM-L6-v2')
+# --- EMBEDDING MODEL CONFIGURATION ---
+embedder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
 
-# Customize page
-st.set_page_config(
-    page_title="Myodetox Assistant",
-    page_icon="🧠",
-    layout="wide"
-)
-
-# Sidebar with branding
+# --- SIDEBAR ---
 with st.sidebar:
-    st.image("Product Evolve.png", use_column_width=True)
-    st.markdown("**Powered by Product Evolve & Cohere**")
-    st.markdown("📧 contact@productevolve.com\n\n🌐 www.productevolve.com")
+    st.image("Product Evolve.png", width=180)
+    st.markdown("### Powered by Product Evolve & Cohere")
+    st.markdown("📩 Contact: hello@productevolve.com")
 
-st.title("🧠 Myodetox Assistant (Text + PDF Search)")
-st.markdown("Built by **Product Evolve** • Powered by **Cohere**")
+# --- MAIN HEADER ---
+st.title("🧠 Cohere RAG Chatbot")
+st.caption("Upload PDFs and ask questions based on the content.")
 
-# Initialize session state
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# --- FILE UPLOAD ---
+uploaded_file = st.file_uploader("📄 Upload a PDF", type="pdf")
 
-if "pdf_chunks" not in st.session_state:
-    st.session_state.pdf_chunks = []
-    st.session_state.pdf_embeddings = []
-
-# File uploader
-uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
+# --- CONTEXT EXTRACTION FROM PDF ---
 if uploaded_file:
-    pdf_reader = PyPDF2.PdfReader(uploaded_file)
-    chunks = []
+    pdf_reader = PdfReader(uploaded_file)
+    text = ""
     for page in pdf_reader.pages:
-        text = page.extract_text()
-        if text:
-            chunks.extend([chunk.strip() for chunk in text.split("\n") if chunk.strip()])
+        text += page.extract_text() or ""
 
-    st.session_state.pdf_chunks = chunks
-    st.session_state.pdf_embeddings = embedder.encode(chunks)
+    sentences = text.split(". ")
+    corpus_embeddings = embedder.encode(sentences, convert_to_tensor=True)
 
-# Input form
-with st.form(key="chat_form", clear_on_submit=True):
-    user_question = st.text_input("Type your question below:", key="input_field")
-    submit = st.form_submit_button("Ask")
+    st.success(f"✅ PDF '{uploaded_file.name}' uploaded and processed!")
 
-# Handle Q&A
-if submit and user_question:
-    st.session_state.chat_history.append(("You", user_question))
+    # --- CHAT SECTION ---
+    st.markdown("### 💬 Ask a question based on your PDF")
+    query = st.text_input("Ask something:", placeholder="e.g., What is the summary of section 2?")
 
-    # If PDF uploaded, use embeddings to find relevant context
-    if st.session_state.pdf_chunks:
-        question_embedding = embedder.encode([user_question])
-        similarities = cosine_similarity(question_embedding, st.session_state.pdf_embeddings)[0]
-        top_idx = similarities.argmax()
-        context = st.session_state.pdf_chunks[top_idx]
-        prompt = f"Context: {context}\n\nQuestion: {user_question}\n\nAnswer:"
-    else:
-        prompt = f"Answer the following question clearly:\n\n{user_question}"
+    if query:
+        query_embedding = embedder.encode(query, convert_to_tensor=True)
+        cos_scores = util.cos_sim(query_embedding, corpus_embeddings)[0]
+        top_idx = np.argmax(cos_scores.cpu().numpy())
+        matched_sentence = sentences[top_idx]
 
-    response = co.generate(
-        model="command-r-plus",
-        prompt=prompt,
-        max_tokens=300,
-        temperature=0.3
-    ).generations[0].text.strip()
+        # Generate response with Cohere
+        response = co.generate(
+            model='command-r-plus',
+            prompt=f"Answer the question based on this context:\n\nContext: {matched_sentence}\n\nQuestion: {query}",
+            max_tokens=150
+        )
 
-    st.session_state.chat_history.append(("Bot", response))
+        st.markdown("#### 🤖 Answer")
+        st.write(response.generations[0].text.strip())
 
-# Show chat
-for sender, message in st.session_state.chat_history:
-    if sender == "You":
-        st.markdown(f"🧑 **{sender}:** {message}", unsafe_allow_html=True)
-    else:
-        st.markdown(f"🤖 **{sender}:** {message}", unsafe_allow_html=True)
+# --- OPTIONAL: MIC INPUT (IF NEEDED LATER) ---
+with st.expander("🎙️ Voice Input (Optional)"):
+    audio_bytes = mic_recorder(start_prompt="Start Recording", stop_prompt="Stop", key="recorder")
+    if audio_bytes:
+        st.audio(audio_bytes, format="audio/wav")
 
-# Clear chat button
-if st.button("🗑️ Clear Chat"):
-    st.session_state.chat_history = []
-
+# --- FOOTER ---
+st.markdown("---")
+st.markdown("© 2025 Product Evolve | Built with ❤️ using Cohere + Streamlit")
