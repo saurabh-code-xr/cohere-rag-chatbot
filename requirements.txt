@@ -1,3 +1,7 @@
 streamlit
 cohere
 scikit-learn
+numpy
+speechrecognition
+pyaudio
+streamlit-mic-recorder
