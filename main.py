@@ -1,135 +1,91 @@
 import streamlit as st
 import cohere
-import json
-import numpy as np
+import os
+import PyPDF2
 from sklearn.metrics.pairwise import cosine_similarity
-from streamlit_mic_recorder import mic_recorder
-import speech_recognition as sr
+from sentence_transformers import SentenceTransformer
 import tempfile
 
-# ---- App Config ----
-st.set_page_config(page_title="Myodetox AI Concierge", page_icon="🩺", layout="centered")
+# Set your Cohere API key here
+COHERE_API_KEY = "nocojkkDxtVHUgFlrKwwh9fPTBwIsBWOxfx9T7Yz"
+co = cohere.Client(COHERE_API_KEY)
 
-# ---- Styles ----
-st.markdown("""
-    <style>
-    .user-bubble {
-        background-color: #f0f0f5;
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
-    }
-    .bot-bubble {
-        background-color: #e6f7ff;
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
-    }
-    .footer {
-        margin-top: 3rem;
-        font-size: 0.8em;
-        color: #888;
-        text-align: center;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# Load embedding model
+embedder = SentenceTransformer('all-MiniLM-L6-v2')
 
-# ---- Header ----
-st.title("🩺 Myodetox AI Concierge (Text + Voice)")
-st.caption("Built by **Product Evolve** • Powered by **Cohere**")
+# Customize page
+st.set_page_config(
+    page_title="Myodetox Assistant",
+    page_icon="🧠",
+    layout="wide"
+)
 
-# ---- Cohere API ----
-co = cohere.Client("nocojkkDxtVHUgFlrKwwh9fPTBwIsBWOxfx9T7Yz")  # Replace with your API key
+# Sidebar with branding
+with st.sidebar:
+    st.image("Product Evolve.png", use_column_width=True)
+    st.markdown("**Powered by Product Evolve & Cohere**")
+    st.markdown("📧 contact@productevolve.com\n\n🌐 www.productevolve.com")
 
-# ---- Load Embeddings ----
-with open("myodetox_embeddings.json", "r") as f:
-    embedded_docs = json.load(f)
-doc_vectors = [doc["embedding"] for doc in embedded_docs]
+st.title("🧠 Myodetox Assistant (Text + PDF Search)")
+st.markdown("Built by **Product Evolve** • Powered by **Cohere**")
 
-# ---- Session State ----
+# Initialize session state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# ---- Input Section ----
-col1, col2 = st.columns([4, 1])
-with col1:
-    user_text = st.text_input("Type or speak your question below:", key="text_input")
-with col2:
-    audio = mic_recorder(start_prompt="🎤 Speak", stop_prompt="⏹ Stop", key="mic")
+if "pdf_chunks" not in st.session_state:
+    st.session_state.pdf_chunks = []
+    st.session_state.pdf_embeddings = []
 
-user_input = ""
+# File uploader
+uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
+if uploaded_file:
+    pdf_reader = PyPDF2.PdfReader(uploaded_file)
+    chunks = []
+    for page in pdf_reader.pages:
+        text = page.extract_text()
+        if text:
+            chunks.extend([chunk.strip() for chunk in text.split("\n") if chunk.strip()])
 
-# ---- Process Audio ----
-if audio and not user_text:
-    recognizer = sr.Recognizer()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmpfile:
-        tmpfile.write(audio["bytes"])
-        tmpfile.flush()
-        with sr.AudioFile(tmpfile.name) as source:
-            try:
-                audio_data = recognizer.record(source)
-                user_input = recognizer.recognize_google(audio_data)
-            except sr.UnknownValueError:
-                user_input = "Sorry, I couldn’t understand that."
+    st.session_state.pdf_chunks = chunks
+    st.session_state.pdf_embeddings = embedder.encode(chunks)
 
-if user_text:
-    user_input = user_text
+# Input form
+with st.form(key="chat_form", clear_on_submit=True):
+    user_question = st.text_input("Type your question below:", key="input_field")
+    submit = st.form_submit_button("Ask")
 
-# ---- Query & Response ----
-if user_input:
-    # Step 1: Embed the query
-    query_embed = co.embed(
-        texts=[user_input],
-        model="embed-english-v3.0",
-        input_type="search_query"
-    ).embeddings[0]
+# Handle Q&A
+if submit and user_question:
+    st.session_state.chat_history.append(("You", user_question))
 
-    # Step 2: Similarity match
-    similarities = cosine_similarity([query_embed], doc_vectors)[0]
-    top_index = int(np.argmax(similarities))
-    context = embedded_docs[top_index]["content"]
-
-    # Step 3: Prompt + Generate
-    prompt = f"""
-    You are a helpful assistant for a physiotherapy clinic. Use only the context below to answer the user's question.
-    If the answer isn't in the context, say: "I'm not sure based on the available info."
-
-    Context:
-    {context}
-
-    Question:
-    {user_input}
-
-    Answer:"""
+    # If PDF uploaded, use embeddings to find relevant context
+    if st.session_state.pdf_chunks:
+        question_embedding = embedder.encode([user_question])
+        similarities = cosine_similarity(question_embedding, st.session_state.pdf_embeddings)[0]
+        top_idx = similarities.argmax()
+        context = st.session_state.pdf_chunks[top_idx]
+        prompt = f"Context: {context}\n\nQuestion: {user_question}\n\nAnswer:"
+    else:
+        prompt = f"Answer the following question clearly:\n\n{user_question}"
 
     response = co.generate(
         model="command-r-plus",
         prompt=prompt,
-        max_tokens=200,
-        temperature=0.5
+        max_tokens=300,
+        temperature=0.3
     ).generations[0].text.strip()
 
-    # Step 4: Store in chat history
-    st.session_state.chat_history.append(("You", user_input))
     st.session_state.chat_history.append(("Bot", response))
 
-    # Step 5: Clear input field
-    st.experimental_rerun()
-
-# ---- Display Chat ----
+# Show chat
 for sender, message in st.session_state.chat_history:
-    css_class = "user-bubble" if sender == "You" else "bot-bubble"
-    st.markdown(f'<div class="{css_class}"><b>{sender}:</b> {message}</div>', unsafe_allow_html=True)
+    if sender == "You":
+        st.markdown(f"🧑 **{sender}:** {message}", unsafe_allow_html=True)
+    else:
+        st.markdown(f"🤖 **{sender}:** {message}", unsafe_allow_html=True)
 
-# ---- Clear Chat Button ----
-if st.button("🧹 Clear Chat"):
+# Clear chat button
+if st.button("🗑️ Clear Chat"):
     st.session_state.chat_history = []
-    st.experimental_rerun()
 
-# ---- Footer ----
-st.markdown("""
-<div class="footer">
-    © 2025 Product Evolve • All rights reserved.<br>
-    Built with ❤️ using Streamlit and Cohere
-</div>
-""", unsafe_allow_html=True)
