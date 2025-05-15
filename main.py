@@ -39,7 +39,7 @@ st.title("🩺 Myodetox AI Concierge (Text + Voice)")
 st.caption("Built by **Product Evolve** • Powered by **Cohere**")
 
 # ---- Cohere API ----
-co = cohere.Client("YnocojkkDxtVHUgFlrKwwh9fPTBwIsBWOxfx9T7Yz")  # Replace with your API key
+co = cohere.Client("nocojkkDxtVHUgFlrKwwh9fPTBwIsBWOxfx9T7Yz")  # Replace with your API key
 
 # ---- Load Embeddings ----
 with open("myodetox_embeddings.json", "r") as f:
