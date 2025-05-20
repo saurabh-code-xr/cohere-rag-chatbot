@@ -1,96 +1,106 @@
 import streamlit as st
 import cohere
 import os
-import base64
+import tempfile
 from PyPDF2 import PdfReader
+from dotenv import load_dotenv
+from gtts import gTTS
+import live_voice_chat
+from rag_chatbot import get_rag_answer
 
-# Load API key
-COHERE_API_KEY = "nocojkkDxtVHUgFlrKwwh9fPTBwIsBWOxfx9T7Yz"
+# --- Load API key from .env ---
+load_dotenv()
+COHERE_API_KEY = os.getenv("nocojkkDxtVHUgFlrKwwh9fPTBwIsBWOxfx9T7Yz")
 co = cohere.Client(COHERE_API_KEY)
 
-# App Configuration
-st.set_page_config(page_title="Evolve Concierge", layout="wide")
+# --- Page Config ---
+st.set_page_config(page_title="My Detox SPA - Agent", page_icon="💬")
 
-# Sidebar Branding
-with st.sidebar:
-    st.image("Product Evolve.png", use_column_width=True)
-    st.markdown("### Evolve Concierge")
-    st.markdown("**Ask anything. Upload docs. Get answers.**")
-    theme = st.radio("Choose Mode:", ["Light", "Dark"])
-    if theme == "Dark":
-        st.markdown("<style>body { background-color: #0e1117; color: white; }</style>", unsafe_allow_html=True)
-    if st.button("Clear Chat History"):
-        st.session_state.chat_history = []
+# --- Sidebar ---
+st.sidebar.image("Product Evolve.png", width=200)
+st.sidebar.title("Evolve Concierge")
+st.sidebar.markdown("**Ask anything. Upload docs. Get answers.**")
+st.sidebar.markdown("---")
+if st.sidebar.button("🧹 Clear Chat"):
+    st.session_state.messages = []
 
-# Transcript download
-def get_text_download_link(text, filename="transcript.txt"):
-    b64 = base64.b64encode(text.encode()).decode()
-    href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">📥 Download Transcript</a>'
-    return href
+# --- Session Memory ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# Memory and session state setup
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-# PDF Text Extraction
-def extract_text_from_pdf(uploaded_files):
-    full_text = ""
-    for file in uploaded_files:
-        reader = PdfReader(file)
-        for page in reader.pages:
-            full_text += page.extract_text() or ""
-    return full_text
-
-# Title
-st.title("🤖 Evolve Concierge")
-
-# File Upload and Preview
-uploaded_files = st.file_uploader("Upload PDF(s)", type="pdf", accept_multiple_files=True)
-pdf_text = ""
+# --- PDF Upload ---
+uploaded_files = st.sidebar.file_uploader("📄 Upload PDF(s)", type="pdf", accept_multiple_files=True)
+all_text = ""
 if uploaded_files:
-    st.subheader("📄 Preview of Uploaded PDF(s):")
-    for file in uploaded_files:
-        st.markdown(f"**{file.name}**")
-    pdf_text = extract_text_from_pdf(uploaded_files)
+    for uploaded_file in uploaded_files:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+            tmp_file.write(uploaded_file.read())
+            reader = PdfReader(tmp_file.name)
+            for page in reader.pages:
+                all_text += page.extract_text() or ""
 
-# Question Input
-question = st.text_input("💬 Ask your question")
+# --- Main Title ---
+st.title("💬 My Detox SPA - Agent")
+st.markdown("### Powered by Cohere")
 
-# Q&A Handling
-if question:
-    context = pdf_text or ""
-    history = "\n".join([f"Q: {q}\nA: {a}" for q, a in st.session_state.chat_history])
-    prompt = f"{history}\n\nContext:\n{context}\n\nQ: {question}\nA:"
-    
-    with st.spinner("Thinking..."):
+# --- Mic Section ---
+with st.expander("🎙️ Voice Chat"):
+    st.markdown("Speak your question and get a spoken response.")
+    live_voice_chat.render_voice_ui()
+
+# --- Text Input Chat ---
+query = st.text_input("Type your question below:")
+enable_audio = st.checkbox("🔊 Read answer aloud")
+
+if st.button("Ask") and query:
+    if all_text:
+        prompt = f"""You are a helpful assistant answering based on the user's documents.
+
+User question: {query}
+
+Relevant document content:
+{all_text}
+
+Answer:"""
         response = co.generate(
             model="command-r-plus",
             prompt=prompt,
             max_tokens=400,
-            temperature=0.3
+            temperature=0.3,
         )
         answer = response.generations[0].text.strip()
-    
-    st.markdown("### 🤖 Answer:")
-    st.write(answer)
-    st.code(answer, language="text")
-    st.button("📋 Copy to Clipboard", on_click=lambda: st.toast("Copied!", icon="✅"))
+    else:
+        answer = get_rag_answer(query)
 
-    # Save Q&A in session
-    st.session_state.chat_history.append((question, answer))
+    st.session_state.messages.append((query, answer))
 
-# Display full chat
-if st.session_state.chat_history:
-    st.subheader("📝 Chat History")
-    for i, (q, a) in enumerate(st.session_state.chat_history):
-        st.markdown(f"**Q{i+1}: {q}**")
-        st.markdown(f"*A{i+1}: {a}*")
+# --- Chat History ---
+for q, a in reversed(st.session_state.messages):
+    with st.chat_message("user"):
+        st.markdown(f"**You:** {q}")
+    with st.chat_message("ai"):
+        st.markdown(a)
+        st.code(a, language="text")
+        if enable_audio:
+            tts = gTTS(text=a)
+            tts.save("response.mp3")
+            st.audio("response.mp3", autoplay=True)
 
-    # Transcript Download Link
-    transcript = "\n\n".join([f"Q: {q}\nA: {a}" for q, a in st.session_state.chat_history])
-    st.markdown(get_text_download_link(transcript), unsafe_allow_html=True)
+# --- Transcript Download ---
+if st.session_state.messages:
+    chat_text = "\n\n".join([f"Q: {q}\nA: {a}" for q, a in st.session_state.messages])
+    st.download_button("📥 Download Transcript", data=chat_text, file_name="evolve_chat.txt")
 
-# Footer
+# --- Footer ---
 st.markdown("---")
-st.markdown("⚡ Powered by **Product Evolve** & **Cohere**")
+st.markdown(
+    """
+    <div style='text-align: center; font-size: 14px;'>
+        <strong>Product Evolve</strong> |
+        <a href='mailto:contact@productevolve.io'>contact@productevolve.io</a> |
+        <a href='https://productevolve.io/' target='_blank'>productevolve.io</a>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 

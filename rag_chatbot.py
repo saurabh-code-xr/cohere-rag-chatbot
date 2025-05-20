@@ -1,11 +1,13 @@
-import streamlit as st
+import os
+from dotenv import load_dotenv
 import cohere
 import json
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-# Load Cohere API key
-co = cohere.Client("your-api-key-here")  # Replace with your actual API key
+load_dotenv()
+COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+co = cohere.Client(COHERE_API_KEY)
 
 # Load knowledge base
 with open("myodetox_embeddings.json", "r") as f:
@@ -13,14 +15,8 @@ with open("myodetox_embeddings.json", "r") as f:
 
 doc_vectors = [doc["embedding"] for doc in embedded_docs]
 
-# Streamlit UI
-st.set_page_config(page_title="Myodetox AI Assistant", page_icon="💬")
-st.title("💬 Myodetox Clinic Chatbot")
-st.write("Ask me anything about the clinic services or policies:")
-
-user_input = st.text_input("Your question:")
-
-if user_input:
+# Function to return RAG answer
+def get_rag_answer(user_input):
     query_embed = co.embed(
         texts=[user_input],
         model="embed-english-v3.0",
@@ -50,4 +46,6 @@ if user_input:
         temperature=0.5
     )
 
-    st.markdown(f"**Bot:** {response.generations[0].text.strip()}")
+    return response.generations[0].text.strip()
+
+
